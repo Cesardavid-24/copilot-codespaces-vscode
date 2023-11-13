@@ -1,64 +1,84 @@
-// create web server
-// 1. create web server
-// 2. create router
-// 3. create router handler
-// 4. listen to port 3000
-
+// Create web server
 const express = require('express');
+const bodyParser = require('body-parser');
+const cors = require('cors');
+const axios = require('axios');
+const { randomBytes } = require('crypto');
+
 const app = express();
-const commentsRouter = require('./routes/comments');
+app.use(bodyParser.json());
+app.use(cors());
 
-const PORT = 3000;
+// Comments object
+const commentsByPostId = {};
 
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-
-app.use('/comments', commentsRouter);
-
-app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
+// Get comments for a post
+app.get('/posts/:id/comments', (req, res) => {
+  res.send(commentsByPostId[req.params.id] || []);
 });
 
-// Path: routes/comments.js
-// create router
-// 1. create router
-// 2. create router handler
+// Create a comment for a post
+app.post('/posts/:id/comments', async (req, res) => {
+  const commentId = randomBytes(4).toString('hex');
+  const { id } = req.params;
+  const { content } = req.body;
 
-const express = require('express');
-const router = express.Router();
+  // Get comments for post
+  const comments = commentsByPostId[id] || [];
 
-router.get('/', (req, res) => {
-  res.send('GET /comments');
+  // Add new comment
+  comments.push({ id: commentId, content, status: 'pending' });
+
+  // Update comments for post
+  commentsByPostId[id] = comments;
+
+  // Send event to event bus
+  await axios.post('http://event-bus-srv:4005/events', {
+    type: 'CommentCreated',
+    data: {
+      id: commentId,
+      content,
+      status: 'pending',
+      postId: id,
+    },
+  });
+
+  // Send response
+  res.status(201).send(comments);
 });
 
-router.post('/', (req, res) => {
-  res.send('POST /comments');
+// Receive events from event bus
+app.post('/events', async (req, res) => {
+  console.log('Event Received:', req.body.type);
+
+  const { type, data } = req.body;
+
+  // Check if event is comment moderated
+  if (type === 'CommentModerated') {
+    // Get comments for post
+    const comments = commentsByPostId[data.postId];
+
+    // Find comment
+    const comment = comments.find((comment) => {
+      return comment.id === data.id;
+    });
+
+    // Update comment status
+    comment.status = data.status;
+
+    // Send event to event bus
+    await axios.post('http://event-bus-srv:4005/events', {
+      type: 'CommentUpdated',
+      data,
+    });
+  }
+
+  // Send response
+  res.send({});
 });
 
-router.get('/:id', (req, res) => {
-  res.send('GET /comments/:id');
+// Listen on port 4001
+app.listen(4001, () => {
+  console.log('Listening on 4001');
 });
-
-router.patch('/:id', (req, res) => {
-  res.send('PATCH /comments/:id');
-});
-
-router.delete('/:id', (req, res) => {
-  res.send('DELETE /comments/:id');
-});
-
-module.exports = router;
-
-// Path: models/comment.js
-// create model
-// 1. create model
-
-const mongoose = require('mongoose');
-
-const commentSchema = new mongoose.Schema({
-  text: String,
-});
-
-const Comment = mongoose.model('Comment', commentSchema);  
-
 
